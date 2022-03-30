@@ -141,7 +141,7 @@ def train_pretrained_network(training_ds, validation_ds, pretrain_rounds=10) -> 
     model.compile(
         loss=losses.BinaryCrossentropy(),
         optimizer=optimizers.Adam(),
-        metrics=metrics.BinaryAccuracy(threshold=0.0)
+        metrics=metrics.BinaryAccuracy()
     )
     early_stop = callbacks.EarlyStopping(patience=PATIENCE, restore_best_weights=True)
     lr_scheduler = callbacks.ReduceLROnPlateau(factor=.5, patience=int(PATIENCE/2))
@@ -154,8 +154,8 @@ def main():
     """ Run script. """
     # Get datasets and perform preprocessing:
     X_train, X_val, X_test, labels = get_datasets()
-    X_train = X_train.cache().prefetch(buffer_size=AUTOTUNE)
-    X_val = X_val.cache().prefetch(buffer_size=AUTOTUNE)
+    X_train = X_train.cache().shuffle(10_000).batch(32).prefetch(buffer_size=AUTOTUNE)
+    X_val = X_val.cache().shuffle(10_000).batch(32).prefetch(buffer_size=AUTOTUNE)
     model = train_pretrained_network(X_train, X_val)
     print(model)
     return {}
