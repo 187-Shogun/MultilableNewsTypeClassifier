@@ -18,7 +18,7 @@ from tensorflow.keras import models
 from tensorflow.keras import layers
 from tensorflow.keras import losses
 from tensorflow.keras import optimizers
-from tensorflow.keras import metrics
+# from tensorflow.keras import metrics
 from tensorflow.keras import callbacks
 import tensorflow_hub as hub
 import tensorflow as tf
@@ -101,7 +101,7 @@ def get_datasets() -> tuple:
     return train_dataset, val_dataset, test_dataset, cats
 
 
-def build_custom_network() -> models.Sequential:
+def build_custom_network(outputs: int) -> models.Sequential:
     """ Build a sequential model using a pretrained embedding layer from TFHub. """
     # TFHub Sources:
     emb_layer = "https://tfhub.dev/google/tf2-preview/nnlm-en-dim128-with-normalization/1"
@@ -111,25 +111,25 @@ def build_custom_network() -> models.Sequential:
         hub.KerasLayer(emb_layer, input_shape=[], dtype=tf.string),
         layers.Dense(128, activation='relu'),
         layers.Dropout(0.3),
-        layers.Dense(1)
+        layers.Dense(outputs, activation='softmax')
     ]
     model = models.Sequential(name='PreTrainedEmbed-SNN', layers=lyrs)
 
     # Compile it and return it:
     model.compile(
-        loss=losses.BinaryCrossentropy(from_logits=True),
+        loss=losses.SparseCategoricalCrossentropy(),
         optimizer=optimizers.Adam(),
-        metrics=metrics.BinaryAccuracy()
+        metrics='accuracy'
     )
     return model
 
 
-def train_pretrained_network(training_ds, validation_ds, pretrain_rounds=10) -> models.Sequential:
+def train_pretrained_network(training_ds, validation_ds, labels, pretrain_rounds=10) -> models.Sequential:
     """ Build a model from a pretrained one. Freeze the bottom layers and train the top layers
     for n epochs. Then, unfreeze the bottom layers, adjust the learning rate down and train the
     model one more time. """
     # Start pretraining:
-    model = build_custom_network()
+    model = build_custom_network(len(labels))
     version_name = get_model_version_name(model.name)
     tb_logs = callbacks.TensorBoard(os.path.join(LOGS_DIR, version_name))
     model.fit(training_ds, validation_data=validation_ds, epochs=pretrain_rounds, callbacks=[tb_logs])
@@ -139,9 +139,9 @@ def train_pretrained_network(training_ds, validation_ds, pretrain_rounds=10) -> 
     for layer in model.layers:
         layer.trainable = True
     model.compile(
-        loss=losses.BinaryCrossentropy(),
+        loss=losses.SparseCategoricalCrossentropy(),
         optimizer=optimizers.Adam(),
-        metrics=metrics.BinaryAccuracy()
+        metrics='accuracy'
     )
     early_stop = callbacks.EarlyStopping(patience=PATIENCE, restore_best_weights=True)
     lr_scheduler = callbacks.ReduceLROnPlateau(factor=.5, patience=int(PATIENCE/2))
@@ -156,8 +156,7 @@ def main():
     X_train, X_val, X_test, labels = get_datasets()
     X_train = X_train.cache().shuffle(10_000).batch(32).prefetch(buffer_size=AUTOTUNE)
     X_val = X_val.cache().shuffle(10_000).batch(32).prefetch(buffer_size=AUTOTUNE)
-    model = train_pretrained_network(X_train, X_val)
-    print(model)
+    train_pretrained_network(X_train, X_val, labels)
     return {}
 
 
