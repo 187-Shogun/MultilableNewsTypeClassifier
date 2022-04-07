@@ -14,23 +14,24 @@ Description: Train a neural network to classify news types based on headlines.
 from tqdm import tqdm
 from datetime import datetime
 from pytz import timezone
+from sklearn.metrics import precision_recall_fscore_support as score
 from tensorflow.keras import models
 from tensorflow.keras import layers
 from tensorflow.keras import losses
 from tensorflow.keras import optimizers
-# from tensorflow.keras import metrics
 from tensorflow.keras import callbacks
 import tensorflow_hub as hub
 import tensorflow as tf
 import pandas as pd
 import numpy as np
+import seaborn as sn
 import os
 
 
 # Global vars:
 EPOCHS = 100
-PATIENCE = 10
-RANDOM_SEED = 69
+PATIENCE = 6
+RANDOM_SEED = 420
 LOGS_DIR = os.path.join(os.getcwd(), 'logs')
 CM_DIR = os.path.join(os.getcwd(), 'confusion-matrixes')
 MODELS_DIR = os.path.join(os.getcwd(), 'models')
@@ -150,6 +151,43 @@ def train_pretrained_network(training_ds, validation_ds, labels, pretrain_rounds
     return model
 
 
+def plot_confision_matrix(model, test_dataset, version_name, label_names):
+    # Fetch predictions and true labels:
+    predictions = []
+    labels = []
+    for x, y in tqdm(test_dataset, desc='Predicting labels on test dataset'):
+        predictions += list(tf.argmax(model.predict(x), axis=1).numpy().astype(float))
+        labels += list(y.numpy().astype(float))
+
+    # Build a confusion matrix and save the plot in a PNG file:
+    matrix = tf.math.confusion_matrix(labels=labels, predictions=predictions).numpy()
+    df = pd.DataFrame(matrix)
+    df.columns = label_names
+    df.index = label_names
+    sn.set(font_scale=0.5)
+    cf = sn.heatmap(df, annot=True, fmt="d")
+    cf.set(xlabel='Actuals', ylabel='Predicted')
+    cf.get_figure().savefig(version_name.replace('.h5', '.png'))
+
+    # Compute precision and recall:
+    precision, recall, f1, _ = score(labels, predictions)
+    print('precision: {}'.format(np.mean(precision)))
+    print('recall: {}'.format(np.mean(recall)))
+    print('fscore: {}'.format(np.mean(f1)))
+
+
+def testing():
+    # Get datasets and perform preprocessing:
+    X_train, X_val, X_test, labels = get_datasets()
+    X_test = X_test.cache().shuffle(10_000).batch(32).prefetch(buffer_size=AUTOTUNE)
+
+    # Load a trained model for evaluation:
+    trained_models = os.listdir(r'models')
+    selected_model = trained_models[1]
+    model = models.load_model(f"models/{selected_model}", custom_objects={'KerasLayer': hub.KerasLayer})
+    return plot_confision_matrix(model, X_test, selected_model, labels)
+
+
 def main():
     """ Run script. """
     # Get datasets and perform preprocessing:
@@ -163,4 +201,4 @@ def main():
 if __name__ == '__main__':
     np.random.seed(RANDOM_SEED)
     pd.set_option('expand_frame_repr', False)
-    main()
+    testing()
