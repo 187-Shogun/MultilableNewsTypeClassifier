@@ -76,25 +76,49 @@ def get_datasets() -> tuple:
     # Read data and filter it down:
     df = read_data()
     df = df[["headline", "category"]]
+    samples = 2000
+    test_val_samples = 250
 
-    # Let's get rid of categories with too few records:
-    invalid_cols = ["EDUCATION", "CULTURE & ARTS"]
+    # Let's get rid of categories with too few records or ambiguous labels:
+    invalid_cols = [
+        "EDUCATION",
+        "CULTURE & ARTS",
+        "WEIRD NEWS",
+        "FIFTY",
+        "IMPACT",
+        "LATINO VOICES",
+        "COLLEGE",
+        "GOOD NEWS",
+        "TECH",
+        "SCIENCE"
+    ]
     df = df.loc[~df.category.isin(invalid_cols)]
+
+    # Let's map similar categories together:
+    df.loc[df.category == 'ARTS', 'category'] = 'ARTS & CULTURE'
+    df.loc[df.category == 'MONEY', 'category'] = 'BUSINESS'
+    df.loc[df.category == 'TASTE', 'category'] = 'FOOD & DRINK'
+    df.loc[df.category == 'GREEN', 'category'] = 'ENVIRONMENT'
+    df.loc[df.category == 'HEALTHY LIVING', 'category'] = 'WELLNESS'
+    df.loc[df.category == 'PARENTS', 'category'] = 'PARENTING'
+    df.loc[df.category == 'STYLE', 'category'] = 'STYLE & BEAUTY'
+    df.loc[df.category == 'THE WORLDPOST', 'category'] = 'WORLD NEWS'
+    df.loc[df.category == 'WORLDPOST', 'category'] = 'WORLD NEWS'
 
     # Let's encode the categories into integers:
     cats = sorted(df.category.unique())
     df.category = df.category.apply(cats.index)
 
     # Let's assemble the datasets:
-    X_train_index = get_train_samples(df, 1000)
+    X_train_index = get_train_samples(df, samples)
     X_train = df.loc[X_train_index]
     X_test = df.loc[~df.index.isin(X_train_index)]
 
     # From the Test dataset, let's break it down using a 50/50 split:
-    X_test_index = get_train_samples(X_test, 50)
+    X_test_index = get_train_samples(X_test, test_val_samples)
     X_val = X_test.loc[X_test_index]
     X_test = X_test.loc[~X_test.index.isin(X_test_index)]
-    X_test = X_test.loc[get_train_samples(X_test, 50)]
+    X_test = X_test.loc[get_train_samples(X_test, test_val_samples)]
 
     train_dataset = tf.data.Dataset.from_tensor_slices((X_train.headline.values, X_train.category.values))
     val_dataset = tf.data.Dataset.from_tensor_slices((X_val.headline.values, X_val.category.values))
@@ -110,8 +134,10 @@ def build_custom_network(outputs: int) -> models.Sequential:
     # Assemble the model:
     lyrs = [
         hub.KerasLayer(emb_layer, input_shape=[], dtype=tf.string),
-        layers.Dense(128, activation='relu'),
-        layers.Dropout(0.3),
+        # layers.Dense(50, activation='relu'),
+        # layers.Dropout(0.25),
+        # layers.Dense(50, activation='relu'),
+        layers.Dropout(0.2),
         layers.Dense(outputs, activation='softmax')
     ]
     model = models.Sequential(name='PreTrainedEmbed-SNN', layers=lyrs)
@@ -167,13 +193,14 @@ def plot_confision_matrix(model, test_dataset, version_name, label_names):
     sn.set(font_scale=0.5)
     cf = sn.heatmap(df, annot=True, fmt="d")
     cf.set(xlabel='Actuals', ylabel='Predicted')
-    cf.get_figure().savefig(version_name.replace('.h5', '.png'))
+    cf.get_figure().savefig(os.path.join(CM_DIR, version_name.replace('.h5', '.png')))
 
     # Compute precision and recall:
     precision, recall, f1, _ = score(labels, predictions)
-    print('precision: {}'.format(np.mean(precision)))
-    print('recall: {}'.format(np.mean(recall)))
-    print('fscore: {}'.format(np.mean(f1)))
+    print(f"Model Test Accuracy: {model.evaluate(test_dataset)}")
+    print(f"Precision: {np.mean(precision)}")
+    print(f"Recall: {np.mean(recall)}")
+    print(f"F1 Score: {np.mean(f1)}")
 
 
 def testing():
@@ -183,7 +210,7 @@ def testing():
 
     # Load a trained model for evaluation:
     trained_models = os.listdir(r'models')
-    selected_model = trained_models[1]
+    selected_model = trained_models[-1]
     model = models.load_model(f"models/{selected_model}", custom_objects={'KerasLayer': hub.KerasLayer})
     return plot_confision_matrix(model, X_test, selected_model, labels)
 
@@ -194,11 +221,16 @@ def main():
     X_train, X_val, X_test, labels = get_datasets()
     X_train = X_train.cache().shuffle(10_000).batch(32).prefetch(buffer_size=AUTOTUNE)
     X_val = X_val.cache().shuffle(10_000).batch(32).prefetch(buffer_size=AUTOTUNE)
-    train_pretrained_network(X_train, X_val, labels)
-    return {}
+    X_test = X_test.cache().shuffle(10_000).batch(32).prefetch(buffer_size=AUTOTUNE)
+
+    #  Start training and evaluation afterwards:
+    model = train_pretrained_network(X_train, X_val, labels)
+    trained_models = os.listdir(r'models')
+    selected_model = trained_models[-1]
+    return plot_confision_matrix(model, X_test, selected_model, labels)
 
 
 if __name__ == '__main__':
     np.random.seed(RANDOM_SEED)
     pd.set_option('expand_frame_repr', False)
-    testing()
+    main()
