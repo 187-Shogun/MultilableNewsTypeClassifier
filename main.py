@@ -30,7 +30,7 @@ import os
 
 # Global vars:
 EPOCHS = 100
-PATIENCE = 6
+PATIENCE = 12
 RANDOM_SEED = 420
 LOGS_DIR = os.path.join(os.getcwd(), 'logs')
 CM_DIR = os.path.join(os.getcwd(), 'confusion-matrixes')
@@ -134,10 +134,7 @@ def build_custom_network(outputs: int) -> models.Sequential:
     # Assemble the model:
     lyrs = [
         hub.KerasLayer(emb_layer, input_shape=[], dtype=tf.string),
-        # layers.Dense(50, activation='relu'),
-        # layers.Dropout(0.25),
-        # layers.Dense(50, activation='relu'),
-        layers.Dropout(0.2),
+        layers.Dropout(0.33),
         layers.Dense(outputs, activation='softmax')
     ]
     model = models.Sequential(name='PreTrainedEmbed-SNN', layers=lyrs)
@@ -151,12 +148,69 @@ def build_custom_network(outputs: int) -> models.Sequential:
     return model
 
 
-def train_pretrained_network(training_ds, validation_ds, labels, pretrain_rounds=10) -> models.Sequential:
+def build_custom_network_alpha(outputs: int) -> tf.keras.Sequential:
+    """ Build a sequential model using a pretrained embedding layer from TFHub
+    and implement Convolutinal layers on top of the embeddings. """
+    # TFHub Sources:
+    emb_layer = "https://tfhub.dev/google/tf2-preview/nnlm-en-dim128-with-normalization/1"
+
+    # Assemble the model:
+    lyrs = [
+        hub.KerasLayer(emb_layer, input_shape=[], dtype=tf.string),
+        tf.keras.layers.Lambda(lambda x: tf.reshape(x, (-1, 128, 1))),
+        tf.keras.layers.Conv1D(32, 8, strides=2, activation='relu'),
+        tf.keras.layers.Conv1D(64, 16, strides=2, activation='relu'),
+        tf.keras.layers.GlobalAveragePooling1D(),
+        tf.keras.layers.Dropout(0.25),
+        tf.keras.layers.Dense(outputs, activation='softmax')
+    ]
+    model = tf.keras.Sequential(name='Pretrained-CNN', layers=lyrs)
+
+    # Compile it and return it:
+    model.compile(
+        loss=losses.SparseCategoricalCrossentropy(),
+        optimizer=tf.keras.optimizers.Adam(),
+        metrics='accuracy'
+    )
+    return model
+
+
+def build_custom_network_sigma(outputs: int) -> tf.keras.Sequential:
+    """ Build a sequential model using a pretrained embedding layer from TFHub
+    and implement Recurrent layers on top of the embeddings. """
+    # TFHub Sources:
+    emb_layer = "https://tfhub.dev/google/tf2-preview/nnlm-en-dim128-with-normalization/1"
+
+    # Assemble the model:
+    lyrs = [
+        hub.KerasLayer(emb_layer, input_shape=[], dtype=tf.string),
+        tf.keras.layers.Lambda(lambda x: tf.reshape(x, (-1, 128, 1))),
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True, dropout=0.2)),
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, dropout=0.2)),
+        tf.keras.layers.Dropout(0.2),
+        tf.keras.layers.Dense(outputs, activation='sigmoid')
+    ]
+    model = tf.keras.Sequential(name='Pretrained-RNN', layers=lyrs)
+
+    # Compile it and return it:
+    model.compile(
+        loss=losses.SparseCategoricalCrossentropy(),
+        optimizer=tf.keras.optimizers.Adam(),
+        metrics='accuracy'
+    )
+    return model
+
+
+def custom_training(
+        model: models.Model,
+        training_ds: tf.data.Dataset,
+        validation_ds: tf.data.Dataset,
+        pretrain_rounds: int = 10
+) -> models.Sequential:
     """ Build a model from a pretrained one. Freeze the bottom layers and train the top layers
     for n epochs. Then, unfreeze the bottom layers, adjust the learning rate down and train the
     model one more time. """
     # Start pretraining:
-    model = build_custom_network(len(labels))
     version_name = get_model_version_name(model.name)
     tb_logs = callbacks.TensorBoard(os.path.join(LOGS_DIR, version_name))
     model.fit(training_ds, validation_data=validation_ds, epochs=pretrain_rounds, callbacks=[tb_logs])
@@ -167,7 +221,7 @@ def train_pretrained_network(training_ds, validation_ds, labels, pretrain_rounds
         layer.trainable = True
     model.compile(
         loss=losses.SparseCategoricalCrossentropy(),
-        optimizer=optimizers.Adam(),
+        optimizer=tf.keras.optimizers.SGD(learning_rate=0.03, momentum=0.9, nesterov=True),
         metrics='accuracy'
     )
     early_stop = callbacks.EarlyStopping(patience=PATIENCE, restore_best_weights=True)
@@ -203,7 +257,8 @@ def plot_confision_matrix(model, test_dataset, version_name, label_names):
     print(f"F1 Score: {np.mean(f1)}")
 
 
-def testing():
+def test_trained_network():
+    """ Load up an existing network and run prediction over a given dataset. """
     # Get datasets and perform preprocessing:
     X_train, X_val, X_test, labels = get_datasets()
     X_test = X_test.cache().shuffle(10_000).batch(32).prefetch(buffer_size=AUTOTUNE)
@@ -224,7 +279,8 @@ def main():
     X_test = X_test.cache().shuffle(10_000).batch(32).prefetch(buffer_size=AUTOTUNE)
 
     #  Start training and evaluation afterwards:
-    model = train_pretrained_network(X_train, X_val, labels)
+    model = build_custom_network(len(labels))
+    model = custom_training(model, X_train, X_val)
     trained_models = os.listdir(r'models')
     selected_model = trained_models[-1]
     return plot_confision_matrix(model, X_test, selected_model, labels)
