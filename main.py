@@ -26,12 +26,15 @@ import pandas as pd
 import numpy as np
 import seaborn as sn
 import os
+import sys
+import shutil
 
 
 # Global vars:
 EPOCHS = 100
-PATIENCE = 12
+PATIENCE = 6
 RANDOM_SEED = 420
+DATASET_URL = 'https://storage.googleapis.com/open-ml-datasets/news-categories-dataset/News_Category_Dataset_v2.zip'
 LOGS_DIR = os.path.join(os.getcwd(), 'logs')
 CM_DIR = os.path.join(os.getcwd(), 'confusion-matrixes')
 MODELS_DIR = os.path.join(os.getcwd(), 'models')
@@ -45,10 +48,20 @@ def get_model_version_name(model_name: str) -> str:
     return f"{model_name}_v.{run_id}"
 
 
+def download_zip():
+    """ Download zipfile from GCS into local system. """
+    return tf.keras.utils.get_file(
+        'News_Category_Dataset_v2.zip',
+        DATASET_URL,
+        extract=True,
+        cache_subdir=os.path.join(os.getcwd(), 'data')
+    )
+
+
 def read_data() -> pd.DataFrame:
     """ Read raw JSON file into a pandas df. """
-    file_path = 'data/News_Category_Dataset_v2.json'
-    return pd.read_json(file_path, lines=True)
+    download_zip()
+    return pd.read_json(r'data/News_Category_Dataset_v2.json', lines=True)
 
 
 def get_train_samples(df: pd.DataFrame, total_samples: int) -> list:
@@ -60,7 +73,7 @@ def get_train_samples(df: pd.DataFrame, total_samples: int) -> list:
 
     # Let's sample some rows for each category:
     X_train_index = []
-    for category in tqdm(indexes.keys(), desc="Sampling categories"):
+    for category in tqdm(indexes.keys(), desc="Sampling categories", file=sys.stdout):
         for row in range(0, total_samples):
             samples = indexes.get(category)
             random_sample = np.random.choice(list(samples))
@@ -201,12 +214,7 @@ def build_custom_network_sigma(outputs: int) -> tf.keras.Sequential:
     return model
 
 
-def custom_training(
-        model: models.Model,
-        training_ds: tf.data.Dataset,
-        validation_ds: tf.data.Dataset,
-        pretrain_rounds: int = 10
-) -> models.Sequential:
+def custom_training(model, training_ds, validation_ds, pretrain_rounds: int = 10) -> models.Sequential:
     """ Build a model from a pretrained one. Freeze the bottom layers and train the top layers
     for n epochs. Then, unfreeze the bottom layers, adjust the learning rate down and train the
     model one more time. """
@@ -231,7 +239,8 @@ def custom_training(
     return model
 
 
-def plot_confision_matrix(model, test_dataset, version_name, label_names):
+def plot_confision_matrix(model, test_dataset, version_name, label_names) -> None:
+    """ Plot a confusion matrix and save it in a PNG file. Print some stats results as well. """
     # Fetch predictions and true labels:
     predictions = []
     labels = []
@@ -247,6 +256,8 @@ def plot_confision_matrix(model, test_dataset, version_name, label_names):
     sn.set(font_scale=0.5)
     cf = sn.heatmap(df, annot=True, fmt="d")
     cf.set(xlabel='Actuals', ylabel='Predicted')
+    shutil.rmtree(CM_DIR, ignore_errors=True)
+    os.makedirs(CM_DIR)
     cf.get_figure().savefig(os.path.join(CM_DIR, version_name.replace('.h5', '.png')))
 
     # Compute precision and recall:
@@ -257,7 +268,7 @@ def plot_confision_matrix(model, test_dataset, version_name, label_names):
     print(f"F1 Score: {np.mean(f1)}")
 
 
-def test_trained_network():
+def test_trained_network() -> None:
     """ Load up an existing network and run prediction over a given dataset. """
     # Get datasets and perform preprocessing:
     X_train, X_val, X_test, labels = get_datasets()
